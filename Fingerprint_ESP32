@@ -1,6 +1,5 @@
-// Fingerprint sensor with ESP 32
-//enter student name and roll number and then register fingerprint
-
+#include <SPI.h>
+#include <MFRC522.h>
 #include <string.h>
 #include <Adafruit_Fingerprint.h>
 #include <Wire.h>
@@ -21,7 +20,12 @@ Adafruit_SSD1306 display(
 
 // ---------------- Buttons ----------------
 #define ENROLL_BTN 4
-#define CLEAR_BTN 5
+#define CLEAR_BTN 25
+
+#define SS_PIN 5
+#define RST_PIN 27
+
+MFRC522 mfrc522(SS_PIN, RST_PIN);
 
 // ---------------- Fingerprint ----------------
 HardwareSerial mySerial(2);
@@ -37,6 +41,7 @@ Preferences prefs;
 struct Student {
   char name[31];
   char roll[11];
+  char rfidUID[20];
   uint16_t finger1;
   uint16_t finger2;
   bool enrolled;
@@ -44,11 +49,11 @@ struct Student {
 
 Student students[] = {
 
-  {"Vasanth Kumar", "23ECR231", 0, 0, false},
-  {"Arun Kumar",    "22ECS002", 0, 0, false},
-  {"Priya Devi",    "22ECS003", 0, 0, false},
-  {"Rahul",         "22ECS004", 0, 0, false},
-  {"Sneha",         "22ECS005", 0, 0, false}
+  {"Vasanth Kumar", "23ECR231", "06008CE4", 0, 0, false},
+  {"Arun Kumar",    "22ECS002", "11223344", 0, 0, false},
+  {"Priya Devi",    "22ECS003", "55667788", 0, 0, false},
+  {"Rahul",         "22ECS004", "99AABBCC", 0, 0, false},
+  {"Sneha",         "22ECS005", "DDEEFF11", 0, 0, false}
 
 };
 
@@ -148,14 +153,12 @@ void showStudent(Student s) {
   display.setTextColor(SSD1306_WHITE);
 
   display.setTextSize(1);
-  display.setCursor(0,0);
+
+  display.setCursor(0,10);
   display.println("WELCOME");
 
-  display.setCursor(0,20);
+  display.setCursor(0,35);
   display.println(s.roll);
-
-  display.setCursor(0,40);
-  display.println(s.name);
 
   display.display();
 }
@@ -184,6 +187,38 @@ int findStudentByRoll(String roll) {
   return -1;
 }
 
+int scanRFID() {
+
+  if (!mfrc522.PICC_IsNewCardPresent())
+    return -1;
+
+  if (!mfrc522.PICC_ReadCardSerial())
+    return -1;
+
+  String uid = "";
+
+  for (byte i = 0; i < mfrc522.uid.size; i++) {
+
+    if (mfrc522.uid.uidByte[i] < 0x10)
+      uid += "0";
+
+    uid += String(mfrc522.uid.uidByte[i], HEX);
+  }
+
+  uid.toUpperCase();
+
+  for (int i = 0; i < studentCount; i++) {
+
+    String dbUID = students[i].rfidUID;
+    dbUID.toUpperCase();
+
+    if (uid == dbUID)
+      return i;
+  }
+
+  return -1;
+}
+
 // ----------------------------------------------------
 // Setup
 // ----------------------------------------------------
@@ -200,7 +235,7 @@ void setup() {
     while (1);
   }
 
-  oledMessage("Fingerprint", "Attendance", "Starting...");
+  oledMessage("IV ECE D", "Attendance", "Starting...");
   delay(1500);
 
   prefs.begin("students", false);
@@ -210,6 +245,8 @@ void setup() {
   mySerial.begin(57600, SERIAL_8N1, 16, 17);
 
   finger.begin(57600);
+  SPI.begin(18, 19, 23, 5);
+  mfrc522.PCD_Init();
 
   if (finger.verifyPassword()) {
 
@@ -227,10 +264,11 @@ void setup() {
   delay(1500);
 
   oledMessage(
-    "System Ready",
-    "Students:",
-    String(studentCount)
-  );
+  "Ready",
+  "Scan RFID",
+  "IV ECE D"
+);
+
 }
 
 // ----------------------------------------------------
@@ -257,7 +295,7 @@ void loop() {
     clearDatabase();
   }
 
-  verifyFingerprint();
+  verifyRFIDAndFingerprint();
 
   delay(100);
 }
@@ -501,6 +539,123 @@ int findStudentByFinger(uint16_t id) {
   }
 
   return -1;
+}
+
+void verifyRFIDAndFingerprint() {
+
+  int rfidStudent = scanRFID();
+
+  if (rfidStudent < 0)
+    return;
+
+  oledMessage(
+    "RFID OK",
+    students[rfidStudent].roll,
+    "Scan Finger"
+  );
+
+  delay(1000);
+
+  unsigned long start = millis();
+
+  while (millis() - start < 10000) {
+
+    uint8_t p = finger.getImage();
+
+    if (p != FINGERPRINT_OK)
+      continue;
+
+    p = finger.image2Tz();
+
+    if (p != FINGERPRINT_OK)
+      continue;
+
+    p = finger.fingerSearch();
+
+    if (p != FINGERPRINT_OK) {
+
+      oledMessage(
+        "Unknown",
+        "Fingerprint"
+      );
+
+      delay(5000);
+
+      oledMessage(
+        "Ready",
+        "Scan RFID",
+        "IV ECE D"
+      );
+
+      return;
+    }
+
+    uint16_t matchedID = finger.fingerID;
+
+    int fingerStudent =
+      findStudentByFinger(matchedID);
+
+    if (fingerStudent < 0) {
+
+      oledMessage(
+        "Unknown",
+        "Fingerprint"
+      );
+
+      delay(5000);
+
+      oledMessage(
+        "Ready",
+        "Scan RFID",
+        "IV ECE D"
+      );
+
+      return;
+    }
+
+    if (fingerStudent == rfidStudent) {
+
+      showStudent(students[fingerStudent]);
+
+      delay(2000);
+
+      oledMessage(
+        "Ready",
+        "Scan RFID",
+        "IV ECE D"
+      );
+
+      return;
+    }
+
+    oledMessage(
+      "Unknown",
+      "Fingerprint"
+    );
+
+    delay(5000);
+
+    oledMessage(
+      "Ready",
+      "Scan RFID",
+      "IV ECE D"
+    );
+
+    return;
+  }
+
+  oledMessage(
+    "Timeout",
+    "No Finger"
+  );
+
+  delay(5000);
+
+  oledMessage(
+    "Ready",
+    "Scan RFID",
+    "IV ECE D"
+  );
 }
 
 void clearDatabase() {
