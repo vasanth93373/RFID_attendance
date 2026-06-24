@@ -264,9 +264,9 @@ void setup() {
   if (!rtc.begin()) {
   Serial.println("RTC Error");
   while (1);
+}
 
   rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-}
 
   mySerial.begin(57600, SERIAL_8N1, 16, 17);
 
