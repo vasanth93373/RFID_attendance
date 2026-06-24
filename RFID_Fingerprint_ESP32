@@ -237,7 +237,7 @@ void setup() {
     while (1);
   }
 
-  oledMessage("Fingerprint", "Attendance", "Starting...");
+  oledMessage("IV ECE D", "Attendance", "Starting...");
   delay(1500);
 
   prefs.begin("students", false);
@@ -267,7 +267,8 @@ void setup() {
 
   oledMessage(
   "Ready",
-  "Scan RFID"
+  "Scan RFID",
+  "IV ECE D"
 );
 
 }
@@ -584,7 +585,8 @@ void verifyRFIDAndFingerprint() {
 
       oledMessage(
         "Ready",
-        "Scan RFID"
+        "Scan RFID",
+        "IV ECE D"
       );
 
       return;
@@ -606,7 +608,8 @@ void verifyRFIDAndFingerprint() {
 
       oledMessage(
         "Ready",
-        "Scan RFID"
+        "Scan RFID",
+        "IV ECE D"
       );
 
       return;
@@ -620,7 +623,8 @@ void verifyRFIDAndFingerprint() {
 
       oledMessage(
         "Ready",
-        "Scan RFID"
+        "Scan RFID",
+        "IV ECE D"
       );
 
       return;
@@ -635,7 +639,8 @@ void verifyRFIDAndFingerprint() {
 
     oledMessage(
       "Ready",
-      "Scan RFID"
+      "Scan RFID",
+      "IV ECE D"
     );
 
     return;
@@ -650,7 +655,8 @@ void verifyRFIDAndFingerprint() {
 
   oledMessage(
     "Ready",
-    "Scan RFID"
+    "Scan RFID",
+    "IV ECE D"
   );
 }
 
