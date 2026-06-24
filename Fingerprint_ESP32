@@ -1,0 +1,536 @@
+// Fingerprint sensor with ESP 32
+//enter student name and roll number and then register fingerprint
+
+#include <string.h>
+#include <Adafruit_Fingerprint.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <Preferences.h>
+
+// ---------------- OLED ----------------
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+
+Adafruit_SSD1306 display(
+  SCREEN_WIDTH,
+  SCREEN_HEIGHT,
+  &Wire,
+  -1
+);
+
+// ---------------- Buttons ----------------
+#define ENROLL_BTN 4
+#define CLEAR_BTN 5
+
+// ---------------- Fingerprint ----------------
+HardwareSerial mySerial(2);
+Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
+
+// ---------------- Preferences ----------------
+Preferences prefs;
+
+// ---------------- Constants ----------------
+#define MAX_STUDENTS 10
+
+// ---------------- Student Structure ----------------
+struct Student {
+  char name[31];
+  char roll[11];
+  uint16_t finger1;
+  uint16_t finger2;
+  bool enrolled;
+};
+
+Student students[] = {
+
+  {"Vasanth Kumar", "23ECR231", 0, 0, false},
+  {"Arun Kumar",    "22ECS002", 0, 0, false},
+  {"Priya Devi",    "22ECS003", 0, 0, false},
+  {"Rahul",         "22ECS004", 0, 0, false},
+  {"Sneha",         "22ECS005", 0, 0, false}
+
+};
+
+const int studentCount =
+sizeof(students) / sizeof(students[0]);
+
+int nextFingerID = 1;
+
+// ----------------------------------------------------
+// OLED Functions
+// ----------------------------------------------------
+
+void oledMessage(String line1,
+                 String line2 = "",
+                 String line3 = "") {
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(0,0);
+  display.println(line1);
+
+  display.setCursor(0,20);
+  display.println(line2);
+
+  display.setCursor(0,40);
+  display.println(line3);
+
+  display.display();
+}
+
+// ----------------------------------------------------
+// Save Students
+// ----------------------------------------------------
+
+void saveStudents() {
+
+  prefs.putInt("count", studentCount);
+  prefs.putInt("nextID", nextFingerID);
+
+  for(int i=0;i<studentCount;i++) {
+
+    String key;
+
+    key = "name" + String(i);
+    prefs.putString(key.c_str(), students[i].name);
+
+    key = "roll" + String(i);
+    prefs.putString(key.c_str(), students[i].roll);
+
+    key = "f1" + String(i);
+    prefs.putUInt(key.c_str(), students[i].finger1);
+
+    key = "f2" + String(i);
+    prefs.putUInt(key.c_str(), students[i].finger2);
+
+    key = "en" + String(i);
+    prefs.putBool(key.c_str(), students[i].enrolled);
+  }
+}
+
+// ----------------------------------------------------
+// Load Students
+// ----------------------------------------------------
+
+void loadStudents() {
+
+  nextFingerID = prefs.getInt("nextID",1);
+
+  for(int i=0; i<studentCount; i++) {
+
+    String key;
+
+    key = "f1" + String(i);
+    students[i].finger1 =
+      prefs.getUInt(key.c_str(),0);
+
+    key = "f2" + String(i);
+    students[i].finger2 =
+      prefs.getUInt(key.c_str(),0);
+
+    key = "en" + String(i);
+    students[i].enrolled =
+      prefs.getBool(key.c_str(),false);
+  }
+}
+
+// ----------------------------------------------------
+// Display Student
+// ----------------------------------------------------
+
+void showStudent(Student s) {
+
+  display.clearDisplay();
+
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setTextSize(1);
+  display.setCursor(0,0);
+  display.println("WELCOME");
+
+  display.setCursor(0,20);
+  display.println(s.roll);
+
+  display.setCursor(0,40);
+  display.println(s.name);
+
+  display.display();
+}
+
+void enrollNewStudent();
+
+bool enrollFingerprint(uint16_t id);
+
+void verifyFingerprint();
+
+void clearDatabase();
+
+int findStudentByFinger(uint16_t id);
+
+
+int findStudentByRoll(String roll) {
+
+  roll.trim();
+
+  for (int i = 0; i < studentCount; i++) {
+
+    if (roll.equalsIgnoreCase(students[i].roll))
+      return i;
+  }
+
+  return -1;
+}
+
+// ----------------------------------------------------
+// Setup
+// ----------------------------------------------------
+
+void setup() {
+
+  Serial.begin(115200);
+
+  pinMode(ENROLL_BTN, INPUT_PULLUP);
+  pinMode(CLEAR_BTN, INPUT_PULLUP);
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED Failed");
+    while (1);
+  }
+
+  oledMessage("Fingerprint", "Attendance", "Starting...");
+  delay(1500);
+
+  prefs.begin("students", false);
+
+  loadStudents();
+
+  mySerial.begin(57600, SERIAL_8N1, 16, 17);
+
+  finger.begin(57600);
+
+  if (finger.verifyPassword()) {
+
+    Serial.println("Fingerprint Found");
+    oledMessage("Fingerprint", "Sensor OK");
+
+  } else {
+
+    Serial.println("Sensor Not Found");
+    oledMessage("Fingerprint", "Sensor Error");
+
+    while (1);
+  }
+
+  delay(1500);
+
+  oledMessage(
+    "System Ready",
+    "Students:",
+    String(studentCount)
+  );
+}
+
+// ----------------------------------------------------
+// Main Loop
+// ----------------------------------------------------
+
+void loop() {
+
+  if (digitalRead(ENROLL_BTN) == LOW) {
+
+    delay(300);
+
+    while (digitalRead(ENROLL_BTN) == LOW);
+
+    enrollNewStudent();
+  }
+
+  if (digitalRead(CLEAR_BTN) == LOW) {
+
+    delay(300);
+
+    while (digitalRead(CLEAR_BTN) == LOW);
+
+    clearDatabase();
+  }
+
+  verifyFingerprint();
+
+  delay(100);
+}
+
+void enrollNewStudent() {
+
+  int enrolledCount = 0;
+
+for(int i = 0; i < studentCount; i++) {
+  if(students[i].enrolled)
+    enrolledCount++;
+}
+
+if(enrolledCount >= studentCount) {
+
+  oledMessage(
+    "All Students",
+    "Already Enrolled"
+  );
+
+  delay(2000);
+  return;
+}
+
+  Serial.println("\nEnter Roll Number:");
+
+while (Serial.available()) Serial.read();
+
+while (!Serial.available());
+
+String roll =
+Serial.readStringUntil('\n');
+
+roll.trim();
+
+int index =
+findStudentByRoll(roll);
+
+if (index < 0) {
+
+  oledMessage(
+    "Roll Number",
+    "Not Found"
+  );
+
+  delay(2000);
+  return;
+}
+
+if (students[index].enrolled) {
+
+  oledMessage(
+    "Already",
+    "Enrolled"
+  );
+
+  delay(2000);
+  return;
+}
+
+  students[index].finger1 = nextFingerID;
+students[index].finger2 = nextFingerID + 1;
+
+  oledMessage("Place Finger 1");
+
+if (!enrollFingerprint(students[index].finger1)) {
+  oledMessage("Finger1 Failed");
+  return;
+}
+
+// 10 second gap before Finger 2
+for (int i = 10; i > 0; i--) {
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(0, 0);
+  display.println("Finger 1 Saved");
+
+  display.setCursor(0, 20);
+  display.print("Finger 2 In:");
+
+  display.setCursor(0, 40);
+  display.print(i);
+  display.println(" sec");
+
+  display.display();
+
+  delay(1000);
+}
+
+oledMessage("Place Finger 2");
+
+if (!enrollFingerprint(students[index].finger2)) {
+  oledMessage("Finger2 Failed");
+  return;
+}
+
+  students[index].enrolled = true;
+
+nextFingerID += 2;
+
+saveStudents();
+
+  oledMessage(
+  "Enrolled",
+  students[index].roll,
+  students[index].name
+);
+
+  delay(3000);
+}
+
+bool enrollFingerprint(uint16_t id) {
+
+  int p = -1;
+
+  while (p != FINGERPRINT_OK) {
+  p = finger.getImage();
+
+  if (p == FINGERPRINT_NOFINGER) {
+    delay(50);
+    continue;
+  }
+
+  if (p != FINGERPRINT_OK) {
+    return false;
+  }
+}
+
+  p = finger.image2Tz(1);
+
+  if (p != FINGERPRINT_OK)
+    return false;
+
+  oledMessage("Remove Finger");
+
+  delay(2000);
+
+  while (finger.getImage() != FINGERPRINT_NOFINGER);
+
+  oledMessage("Place Same Finger");
+
+  p = -1;
+
+  while (p != FINGERPRINT_OK) {
+
+    p = finger.getImage();
+
+    delay(50);
+  }
+
+  p = finger.image2Tz(2);
+
+  if (p != FINGERPRINT_OK)
+    return false;
+
+  p = finger.createModel();
+
+  if (p != FINGERPRINT_OK)
+    return false;
+
+  finger.deleteModel(id);
+
+  p = finger.storeModel(id);
+
+  if (p == FINGERPRINT_OK)
+    return true;
+
+  return false;
+}
+
+void verifyFingerprint() {
+
+  uint8_t p = finger.getImage();
+
+  if (p != FINGERPRINT_OK)
+    return;
+
+  p = finger.image2Tz();
+
+  if (p != FINGERPRINT_OK)
+    return;
+
+  p = finger.fingerSearch();
+
+  if (p != FINGERPRINT_OK) {
+
+    oledMessage(
+      "Unknown",
+      "Fingerprint"
+    );
+
+    delay(1500);
+
+    return;
+  }
+
+  uint16_t matchedID = finger.fingerID;
+
+  int index = findStudentByFinger(matchedID);
+
+  if (index < 0) {
+
+    oledMessage(
+      "Record",
+      "Not Found"
+    );
+
+    delay(1500);
+
+    return;
+  }
+
+  showStudent(students[index]);
+
+  Serial.println("\nMATCH FOUND");
+
+  Serial.print("Name : ");
+  Serial.println(students[index].name);
+
+  Serial.print("Roll : ");
+  Serial.println(students[index].roll);
+
+  Serial.print("Finger ID : ");
+  Serial.println(matchedID);
+
+  delay(3000);
+}
+
+int findStudentByFinger(uint16_t id) {
+
+  for (int i = 0; i < studentCount; i++) {
+
+    if (students[i].finger1 == id)
+      return i;
+
+    if (students[i].finger2 == id)
+      return i;
+  }
+
+  return -1;
+}
+
+void clearDatabase() {
+
+  oledMessage(
+    "Deleting",
+    "Database..."
+  );
+
+  finger.emptyDatabase();
+
+  prefs.clear();
+
+  for(int i = 0; i < studentCount; i++) {
+
+    students[i].finger1 = 0;
+    students[i].finger2 = 0;
+    students[i].enrolled = false;
+  }
+
+  nextFingerID = 1;
+
+  oledMessage(
+    "Database",
+    "Cleared"
+  );
+
+  delay(3000);
+
+  oledMessage(
+    "System Ready"
+  );
+}
