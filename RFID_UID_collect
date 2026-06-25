@@ -1,0 +1,151 @@
+// This code is used to collect the UID of each ID Card
+
+#include <SPI.h>
+#include <MFRC522.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+
+#define SS_PIN 5
+#define RST_PIN 27
+
+#define CLEAR_BTN 25
+#define BUZZER_PIN 26
+
+MFRC522 mfrc522(SS_PIN, RST_PIN);
+
+Adafruit_SSD1306 display(
+  SCREEN_WIDTH,
+  SCREEN_HEIGHT,
+  &Wire,
+  -1
+);
+
+String lastUID = "";
+
+// ---------------- Buzzer ----------------
+
+void singleBeep() {
+  digitalWrite(BUZZER_PIN, HIGH);
+  delay(150);
+  digitalWrite(BUZZER_PIN, LOW);
+}
+
+void doubleBeep() {
+  for (int i = 0; i < 2; i++) {
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(150);
+    digitalWrite(BUZZER_PIN, LOW);
+    delay(150);
+  }
+}
+
+// ---------------- Setup ----------------
+
+void setup() {
+
+  Serial.begin(115200);
+
+  pinMode(CLEAR_BTN, INPUT_PULLUP);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  // OLED
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED Failed");
+    while (1);
+  }
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+
+  display.setCursor(0, 0);
+  display.println("RFID UID Reader");
+  display.println();
+  display.println("Scan Card...");
+  display.display();
+
+  // RC522
+  SPI.begin(18, 19, 23, 5);
+  mfrc522.PCD_Init();
+
+  Serial.println("Scan RFID Card...");
+}
+
+// ---------------- Loop ----------------
+
+void loop() {
+
+  // Clear Button
+  if (digitalRead(CLEAR_BTN) == LOW) {
+
+    delay(50);
+
+    while (digitalRead(CLEAR_BTN) == LOW);
+
+    doubleBeep();
+
+    lastUID = "";
+
+    display.clearDisplay();
+    display.setTextSize(1);
+
+    display.setCursor(0, 0);
+    display.println("Display Cleared");
+
+    display.setCursor(0, 20);
+    display.println("Scan Card...");
+
+    display.display();
+
+    delay(500);
+  }
+
+  // RFID Card Detection
+  if (!mfrc522.PICC_IsNewCardPresent())
+    return;
+
+  if (!mfrc522.PICC_ReadCardSerial())
+    return;
+
+  String uid = "";
+
+  for (byte i = 0; i < mfrc522.uid.size; i++) {
+
+    if (mfrc522.uid.uidByte[i] < 0x10)
+      uid += "0";
+
+    uid += String(mfrc522.uid.uidByte[i], HEX);
+  }
+
+  uid.toUpperCase();
+
+  lastUID = uid;
+
+  Serial.print("UID: ");
+  Serial.println(uid);
+
+  singleBeep();
+
+  // OLED Display
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("Card UID:");
+
+  display.setTextSize(2);
+  display.setCursor(0, 25);
+  display.println(uid);
+
+  display.display();
+
+  mfrc522.PICC_HaltA();
+
+  delay(1000);
+}
