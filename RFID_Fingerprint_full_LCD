@@ -1,0 +1,1347 @@
+// full code with LCD display
+
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <SPI.h>
+#include <MFRC522.h>
+#include <string.h>
+#include <Adafruit_Fingerprint.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <Preferences.h>
+#include <RTClib.h>
+
+
+// ---------------- LCD Display ----------------
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// ---------------- Buttons ----------------
+#define ENROLL_BTN 4
+#define CLEAR_BTN 25
+
+#define EXPORT_BTN 32
+#define SCAN_CLEAR_BTN 33
+
+#define RESCAN_BTN 14
+
+#define BUZZER_PIN 26
+
+#define SS_PIN 5
+#define RST_PIN 27
+
+MFRC522 mfrc522(SS_PIN, RST_PIN);
+
+// ---------------- Fingerprint ----------------
+HardwareSerial mySerial(2);
+Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
+
+// ---------------- Preferences ----------------
+Preferences prefs;
+
+RTC_DS3231 rtc;
+
+// Wifi settings
+
+const char* ssidList[] = {
+  "VK",
+  "WiFi2",
+  "WiFi3",
+  "WiFi4",
+  "WiFi5"
+};
+
+const char* passList[] = {
+  "vasanthkumar",
+  "pass2",
+  "pass3",
+  "pass4",
+  "pass5"
+};
+
+const int wifiCount = 5;
+
+
+String scriptURL = "https://script.google.com/macros/s/AKfycbwGOy9pmqAVagB-Uu7_q2rzEWeQt4fQMg0kKCEcaZjKOUSIhoW8y21Ty5lZPD_6ScZB/exec";
+
+
+// ---------------- Constants ----------------
+#define MAX_STUDENTS 70
+
+// ---------------- Student Structure ----------------
+struct Student {
+  char name[31];
+  char roll[11];
+  char rfidUID[20];
+
+  uint16_t finger1;
+  uint16_t finger2;
+  uint16_t finger3;
+  uint16_t finger4;
+
+  bool enrolled;
+};
+
+struct Attendance {
+  bool present;
+  char time[25];
+};
+
+Attendance attendance[MAX_STUDENTS];
+Student students[] = {
+
+  {"person_1",        "22ECR123", "99AABBCC", 0, 0, 0, 0, false},
+  {"person_2",        "23ECL123", "99AABBCC", 0, 0, 0, 0, false},
+  {"person_3",        "23ECL234", "99AABBCC", 0, 0, 0, 0, false},
+  {"person_4",        "23ECL345", "99AABBCC", 0, 0, 0, 0, false},
+  {"person_5",        "23ECR123", "BF352E49", 0, 0, 0, 0, false},
+  {"person_6",        "23ECR234", "068997E4", 0, 0, 0, 0, false},
+  {"person_7",        "23ECR345", "61EC7F17", 0, 0, 0, 0, false},
+  {"person_8",        "23ECR456", "55667788", 0, 0, 0, 0, false},
+  {"person_9",        "23ECR567", "99AABBCC", 0, 0, 0, 0, false},
+  {"person_10",       "23ECR678", "BF352E49", 0, 0, 0, 0, false},
+ 
+};
+
+const int studentCount =
+sizeof(students) / sizeof(students[0]);
+
+int nextFingerID = 1;
+
+// ----------------------------------------------------
+// LCD Functions
+// ----------------------------------------------------
+
+void lcdMessage(String line1, String line2 = "")
+{
+    lcd.clear();
+
+    lcd.setCursor(0,0);
+
+    if(line1.length() > 16)
+        lcd.print(line1.substring(0,16));
+    else
+        lcd.print(line1);
+
+    lcd.setCursor(0,1);
+
+    if(line2.length() > 16)
+        lcd.print(line2.substring(0,16));
+    else
+        lcd.print(line2);
+}
+
+// ----------------------------------------------------
+// Save Students
+// ----------------------------------------------------
+
+void saveStudents() {
+
+  prefs.putInt("count", studentCount);
+  prefs.putInt("nextID", nextFingerID);
+
+  for(int i=0;i<studentCount;i++) {
+
+    String key;
+
+    key = "name" + String(i);
+    prefs.putString(key.c_str(), students[i].name);
+
+    key = "roll" + String(i);
+    prefs.putString(key.c_str(), students[i].roll);
+
+    key = "f1" + String(i);
+    prefs.putUInt(key.c_str(), students[i].finger1);
+
+    key = "f2" + String(i);
+    prefs.putUInt(key.c_str(), students[i].finger2);
+
+    key = "f3" + String(i);
+    prefs.putUInt(key.c_str(), students[i].finger3);
+
+    key = "f4" + String(i);
+    prefs.putUInt(key.c_str(), students[i].finger4);
+
+    key = "en" + String(i);
+    prefs.putBool(key.c_str(), students[i].enrolled);
+  }
+}
+
+// ----------------------------------------------------
+// Load Students
+// ----------------------------------------------------
+
+void loadStudents() {
+
+  nextFingerID = prefs.getInt("nextID",1);
+
+  for(int i=0; i<studentCount; i++) {
+
+    String key;
+
+    key = "f1" + String(i);
+    students[i].finger1 =
+      prefs.getUInt(key.c_str(),0);
+
+    key = "f2" + String(i);
+    students[i].finger2 =
+      prefs.getUInt(key.c_str(),0);
+
+    key = "f3" + String(i);
+      students[i].finger3 =
+        prefs.getUInt(key.c_str(),0);
+
+    key = "f4" + String(i);
+      students[i].finger4 =
+        prefs.getUInt(key.c_str(),0);
+
+    key = "en" + String(i);
+    students[i].enrolled =
+      prefs.getBool(key.c_str(),false);
+  }
+}
+
+// ----------------------------------------------------
+// Display Student
+// ----------------------------------------------------
+
+void showStudent(Student s)
+{
+    lcd.clear();
+
+    lcd.setCursor(0,0);
+    lcd.print("WELCOME");
+
+    lcd.setCursor(0,1);
+    lcd.print(s.roll);
+}
+
+void enrollNewStudent();
+bool enrollFingerprint(uint16_t id);
+void verifyFingerprint();
+void clearDatabase();
+int findStudentByFinger(uint16_t id);
+
+void saveAttendance();
+void loadAttendance();
+void exportAttendance();
+void clearAttendance();
+
+bool connectWiFi();
+
+void singleBeep();
+void tripleBeep();
+void fiveBeep();
+
+void attendanceClearBeep();
+
+void doubleBeep3Times();
+void checkBellSchedule();
+
+int findStudentByRoll(String roll) {
+
+  roll.trim();
+
+  for (int i = 0; i < studentCount; i++) {
+
+    if (roll.equalsIgnoreCase(students[i].roll))
+      return i;
+  }
+
+  return -1;
+}
+
+int scanRFID() {
+
+  if (!mfrc522.PICC_IsNewCardPresent())
+    return -1;
+
+  if (!mfrc522.PICC_ReadCardSerial())
+    return -1;
+
+  String uid = "";
+
+  for (byte i = 0; i < mfrc522.uid.size; i++) {
+
+    if (mfrc522.uid.uidByte[i] < 0x10)
+      uid += "0";
+
+    uid += String(mfrc522.uid.uidByte[i], HEX);
+  }
+
+  uid.toUpperCase();
+
+  for (int i = 0; i < studentCount; i++) {
+
+    String dbUID = students[i].rfidUID;
+    dbUID.toUpperCase();
+
+    if (uid == dbUID)
+      return i;
+  }
+
+  return -1;
+}
+
+void sendToGoogleSheet(
+  String sheetName,
+  String rollNo,
+  String name,
+  String status,
+  String timeStamp)
+{
+  HTTPClient http;
+
+  String url =
+    scriptURL +
+    "?sheet=" + urlencode(sheetName) +
+    "&rollno=" + urlencode(rollNo) +
+    "&name=" + urlencode(name) +
+    "&status=" + urlencode(status) +
+    "&time=" + urlencode(timeStamp);
+
+  http.begin(url);
+
+  int httpCode = http.GET();
+
+  Serial.print("URL: ");
+  Serial.println(url);
+
+  Serial.print("HTTP Code: ");
+  Serial.println(httpCode);
+
+  http.end();
+}
+
+// -------------------------------------------------------------------------
+
+String urlencode(String str)
+{
+  String encodedString = "";
+  char c;
+  char code0;
+  char code1;
+
+  for (int i = 0; i < str.length(); i++) {
+    c = str.charAt(i);
+
+    if (isalnum(c)) {
+      encodedString += c;
+    } else {
+      encodedString += '%';
+      code0 = (c >> 4) & 0xF;
+      code1 = c & 0xF;
+      encodedString += "0123456789ABCDEF"[code0];
+      encodedString += "0123456789ABCDEF"[code1];
+    }
+  }
+
+  return encodedString;
+}
+
+//  -----------------------------------------------------------------------
+
+bool connectWiFi()
+{
+  WiFi.mode(WIFI_STA);
+
+  for(int i = 0; i < wifiCount; i++)
+  {
+    lcdMessage(
+      "Trying WiFi",
+      ssidList[i]
+    );
+
+    WiFi.begin(ssidList[i], passList[i]);
+
+    unsigned long startTime = millis();
+
+    while(WiFi.status() != WL_CONNECTED &&
+          millis() - startTime < 10000)
+    {
+      delay(500);
+    }
+
+    if(WiFi.status() == WL_CONNECTED)
+    {
+      lcdMessage(
+        "Connected",
+        ssidList[i]
+      );
+
+      delay(1000);
+      return true;
+    }
+
+    WiFi.disconnect(true);
+    delay(500);
+  }
+
+  lcdMessage(
+    "No WiFi",
+    "Available"
+  );
+
+  return false;
+}
+
+struct BellTime {
+  uint8_t hour;
+  uint8_t minute;
+  bool rung;
+};
+
+BellTime bells[] = {
+  {9, 35, false},
+  {10, 25, false},
+  {10, 45, false},
+  {11, 35, false},
+  {12, 25, false},
+  {13, 25, false}, // 1:25 PM
+  {14, 15, false},
+  {15, 5, false},
+  {15, 25, false},
+  {16, 15, false}
+};
+
+const int bellCount = sizeof(bells) / sizeof(bells[0]);
+
+int lastDay = -1;
+
+
+// ----------------------------------------------------
+// Setup
+// ----------------------------------------------------
+
+void setup() {
+
+  Serial.begin(115200);
+
+  pinMode(ENROLL_BTN, INPUT_PULLUP);
+  pinMode(CLEAR_BTN, INPUT_PULLUP);
+
+  pinMode(EXPORT_BTN, INPUT_PULLUP);
+  pinMode(SCAN_CLEAR_BTN, INPUT_PULLUP);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  pinMode(RESCAN_BTN, INPUT_PULLUP);
+
+  lcd.init();
+  lcd.backlight();
+
+
+  // Designer Splash Screen
+  lcd.clear();
+
+  lcd.setCursor(0,0);
+  lcd.print("Designed by");
+  delay(1000);
+
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("Electronic");
+
+  lcd.setCursor(0,1);
+  lcd.print("Designer");
+  
+  delay(1000);
+
+  lcd.clear();
+
+  lcd.setCursor(0,0);
+  lcd.print("IV ECE D");
+
+  lcd.setCursor(0,1);
+  lcd.print("Attendance");
+
+  delay(1000);
+
+  lcdMessage("Attendance", "Starting...");
+  delay(1500);
+
+  prefs.begin("students", false);
+
+  loadStudents();
+  loadAttendance();
+
+  if (!rtc.begin()) {
+  Serial.println("RTC Error");
+  while (1);
+}
+
+  rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+
+  mySerial.begin(57600, SERIAL_8N1, 16, 17);
+
+  finger.begin(57600);
+  SPI.begin(18, 19, 23, 5);
+  mfrc522.PCD_Init();
+
+  if (finger.verifyPassword()) {
+
+    Serial.println("Fingerprint Found");
+    lcdMessage("Fingerprint", "Sensor OK");
+
+  } else {
+
+    Serial.println("Sensor Not Found");
+    lcdMessage("Fingerprint", "Sensor Error");
+
+    while (1);
+  }
+
+  delay(1500);
+
+ lcdMessage(
+    "IV ECE D",
+    "Scan ID Card"
+);
+
+}
+
+// ----------------------------------------------------
+// Main Loop
+// ----------------------------------------------------
+
+void loop() {
+
+  if (digitalRead(ENROLL_BTN) == LOW) {
+
+    delay(300);
+
+    while (digitalRead(ENROLL_BTN) == LOW);
+
+    enrollNewStudent();
+  }
+
+  if (digitalRead(CLEAR_BTN) == LOW) {
+
+    delay(300);
+
+    while (digitalRead(CLEAR_BTN) == LOW);
+
+    clearDatabase();
+  }
+
+  if (digitalRead(EXPORT_BTN) == LOW) {
+
+  delay(300);
+
+  while(digitalRead(EXPORT_BTN) == LOW);
+
+  exportAttendance();
+}
+
+if (digitalRead(SCAN_CLEAR_BTN) == LOW) {
+
+  delay(300);
+
+  while(digitalRead(SCAN_CLEAR_BTN) == LOW);
+
+  clearAttendance();
+}
+
+  verifyRFIDAndFingerprint();
+
+  checkBellSchedule();
+
+  delay(100);
+}
+
+//--------------------------------------------------------------------
+
+void fingerGapCountdown(int fingerNo)
+{
+    for(int i=10;i>0;i--)
+    {
+        lcd.clear();
+
+        lcd.setCursor(0,0);
+        lcd.print("Finger ");
+        lcd.print(fingerNo-1);
+        lcd.print(" Saved");
+
+        lcd.setCursor(0,1);
+        lcd.print("Next:");
+        lcd.print(i);
+        lcd.print(" Sec");
+
+        delay(1000);
+    }
+}
+
+bool enrollFingerprintWithRetry(uint16_t id, String fingerName)
+{
+  while (true)
+  {
+    lcdMessage("Place " + fingerName);
+
+    if (enrollFingerprint(id))
+      return true;
+
+    fiveBeep();
+
+    lcdMessage(
+      fingerName + " Failed",
+      "Press RESCAN"
+    );
+
+    while (true)
+    {
+      if (digitalRead(RESCAN_BTN) == LOW)
+      {
+        delay(300);
+        while (digitalRead(RESCAN_BTN) == LOW);
+        break;   // retry same finger
+      }
+
+      if (digitalRead(CLEAR_BTN) == LOW)
+      {
+        delay(300);
+        while (digitalRead(CLEAR_BTN) == LOW);
+
+        finger.deleteModel(id);
+
+        lcdMessage(
+          "Enrollment",
+          "Cancelled"
+        );
+
+        delay(2000);
+
+        return false;
+      }
+
+      delay(50);
+    }
+  }
+}
+
+//-------------------------------------------------------------------------
+
+void enrollNewStudent() {
+
+  int enrolledCount = 0;
+
+for(int i = 0; i < studentCount; i++) {
+  if(students[i].enrolled)
+    enrolledCount++;
+}
+
+if(enrolledCount >= studentCount) {
+
+  lcdMessage(
+    "All Students",
+    "Already Enrolled"
+  );
+
+  delay(2000);
+  return;
+}
+
+  Serial.println("\nEnter Roll Number:");
+
+while (Serial.available()) Serial.read();
+
+while (!Serial.available());
+
+String roll =
+Serial.readStringUntil('\n');
+
+roll.trim();
+
+int index =
+findStudentByRoll(roll);
+
+if (index < 0) {
+
+  lcdMessage(
+    "Roll Number",
+    "Not Found"
+  );
+
+  delay(2000);
+  return;
+}
+
+if (students[index].enrolled) {
+
+  lcdMessage(
+    "Already",
+    "Enrolled"
+  );
+
+  delay(2000);
+  return;
+}
+
+  students[index].finger1 = nextFingerID;
+  students[index].finger2 = nextFingerID + 1;
+  students[index].finger3 = nextFingerID + 2;
+  students[index].finger4 = nextFingerID + 3;
+
+if (!enrollFingerprintWithRetry(
+      students[index].finger1,
+      "Finger 1"))
+{
+  return;
+}
+
+// 10 second gap before Finger 2
+for (int i = 10; i > 0; i--) {
+
+  lcd.clear();
+
+  lcd.setCursor(0,0);
+  lcd.print("Finger 1 Saved");
+
+  lcd.setCursor(0,1);
+  lcd.print("Finger2:");
+  lcd.print(i);
+  lcd.print("s");
+
+  delay(1000);
+}
+
+if (!enrollFingerprintWithRetry(
+      students[index].finger2,
+      "Finger 2"))
+{
+  return;
+}
+
+// 10 sec gap before Finger 3
+
+fingerGapCountdown(3);
+
+if (!enrollFingerprintWithRetry(
+      students[index].finger3,
+      "Finger 3"))
+{
+  return;
+}
+
+// 10 sec gap before Finger 4
+fingerGapCountdown(4);
+
+if (!enrollFingerprintWithRetry(
+      students[index].finger4,
+      "Finger 4"))
+{
+  return;
+}
+
+
+  students[index].enrolled = true;
+
+  nextFingerID += 4;
+
+saveStudents();
+
+  lcdMessage(
+  "Enrolled",
+  students[index].roll
+);
+
+  delay(2000);
+
+  lcdMessage(
+    "IV ECE D",
+    "Scan ID Card"
+);
+
+}
+
+bool enrollFingerprint(uint16_t id) {
+
+  int p = -1;
+
+  while (p != FINGERPRINT_OK) {
+  p = finger.getImage();
+
+  if (p == FINGERPRINT_NOFINGER) {
+    delay(50);
+    continue;
+  }
+
+  if (p != FINGERPRINT_OK) {
+    return false;
+  }
+}
+
+  p = finger.image2Tz(1);
+
+  if (p != FINGERPRINT_OK)
+    return false;
+
+  lcdMessage("Remove Finger");
+
+  delay(2000);
+
+  while (finger.getImage() != FINGERPRINT_NOFINGER);
+
+  lcdMessage("Place Same Finger");
+
+  p = -1;
+
+  while (p != FINGERPRINT_OK) {
+
+    p = finger.getImage();
+
+    delay(50);
+  }
+
+  p = finger.image2Tz(2);
+
+  if (p != FINGERPRINT_OK)
+    return false;
+
+  p = finger.createModel();
+
+  if (p != FINGERPRINT_OK)
+    return false;
+
+  finger.deleteModel(id);
+
+  p = finger.storeModel(id);
+
+  if (p == FINGERPRINT_OK)
+    return true;
+
+  return false;
+}
+
+void verifyFingerprint() {
+
+  uint8_t p = finger.getImage();
+
+  if (p != FINGERPRINT_OK)
+    return;
+
+  p = finger.image2Tz();
+
+  if (p != FINGERPRINT_OK)
+    return;
+
+  p = finger.fingerSearch();
+
+  if (p != FINGERPRINT_OK) {
+
+    fiveBeep();
+    
+    lcdMessage(
+      "Unknown",
+      "Fingerprint"
+    );
+
+    delay(1500);
+
+    return;
+  }
+
+  uint16_t matchedID = finger.fingerID;
+
+  int index = findStudentByFinger(matchedID);
+
+  if (index < 0) {
+
+    lcdMessage(
+      "Record",
+      "Not Found"
+    );
+
+    delay(1500);
+
+    return;
+  }
+
+  showStudent(students[index]);
+
+  Serial.println("\nMATCH FOUND");
+
+  Serial.print("Name : ");
+  Serial.println(students[index].name);
+
+  Serial.print("Roll : ");
+  Serial.println(students[index].roll);
+
+  Serial.print("Finger ID : ");
+  Serial.println(matchedID);
+
+  delay(3000);
+}
+
+int findStudentByFinger(uint16_t id) {
+
+  for (int i = 0; i < studentCount; i++) {
+
+    if (students[i].finger1 == id) return i;
+    if (students[i].finger2 == id) return i;
+    if (students[i].finger3 == id) return i;
+    if (students[i].finger4 == id) return i;
+  }
+
+  return -1;
+}
+
+void verifyRFIDAndFingerprint() {
+
+  int rfidStudent = scanRFID();
+
+if (rfidStudent < 0)
+  return;
+
+// Prevent duplicate attendance
+if (attendance[rfidStudent].present) {
+
+  fiveBeep();
+
+  lcdMessage(
+    "Already Marked",
+    students[rfidStudent].roll
+  );
+
+  delay(1500);
+
+  lcdMessage(
+    "IV ECE D",
+    "Scan ID Card"
+);
+
+  return;
+}
+
+  singleBeep();
+
+  lcdMessage(
+    students[rfidStudent].roll,
+    "Scan Finger"
+  );
+
+  delay(1000);
+
+  unsigned long start = millis();
+
+  while (millis() - start < 10000) {
+
+    uint8_t p = finger.getImage();
+
+    if (p != FINGERPRINT_OK)
+      continue;
+
+    p = finger.image2Tz();
+
+    if (p != FINGERPRINT_OK)
+      continue;
+
+    p = finger.fingerSearch();
+
+    if (p != FINGERPRINT_OK) {
+
+      fiveBeep();
+      
+      lcdMessage(
+        "Unknown",
+        "Fingerprint"
+      );
+
+      delay(2500);
+
+      lcdMessage(
+    "IV ECE D",
+    "Scan ID Card"
+);
+
+      return;
+    }
+
+    uint16_t matchedID = finger.fingerID;
+
+    int fingerStudent =
+      findStudentByFinger(matchedID);
+
+    if (fingerStudent < 0) {
+
+      fiveBeep();
+
+      lcdMessage(
+        "Unknown",
+        "Fingerprint"
+      );
+
+      delay(2500);
+
+      lcdMessage(
+    "IV ECE D",
+    "Scan ID Card"
+);
+
+      return;
+    }
+
+    if (fingerStudent == rfidStudent) {
+
+      singleBeep();
+
+  DateTime now = rtc.now() + TimeSpan(0, 0, 4, 30);  // date and time span
+
+  attendance[fingerStudent].present = true;
+
+  int hour12 = now.hour() % 12;
+  if (hour12 == 0) hour12 = 12;
+
+  sprintf(
+    attendance[fingerStudent].time,
+    "%02d/%02d/%02d %s",
+    hour12,
+    now.minute(),
+    now.second(),
+    (now.hour() >= 12) ? "PM" : "AM"
+  );
+
+  saveAttendance();
+
+  showStudent(students[fingerStudent]);
+
+  delay(1500);
+
+  lcdMessage(
+    "IV ECE D",
+    "Scan ID Card"
+);
+
+  return;
+}
+
+    fiveBeep();
+
+    lcdMessage(
+      "Unknown",
+      "Fingerprint"
+    );
+
+    delay(2500);
+
+    lcdMessage(
+    "IV ECE D",
+    "Scan ID Card"
+);
+
+    return;
+  }
+
+  lcdMessage(
+    "Timeout",
+    "No Finger"
+  );
+
+  delay(2500);
+
+  lcdMessage(
+    "IV ECE D",
+    "Scan ID Card"
+);
+}
+
+void clearDatabase() {
+
+  lcdMessage(
+    "Deleting",
+    "Database..."
+  );
+
+  finger.emptyDatabase();
+
+  prefs.clear();
+
+  for(int i = 0; i < studentCount; i++) {
+
+    students[i].finger1 = 0;
+    students[i].finger2 = 0;
+    students[i].finger3 = 0;
+    students[i].finger4 = 0;
+    students[i].enrolled = false;
+  }
+
+  nextFingerID = 1;
+
+  lcdMessage(
+    "Database",
+    "Cleared"
+  );
+
+  delay(1500);
+
+  lcdMessage(
+    "System Ready"
+  );
+
+  delay(1000);
+
+  lcdMessage(
+    "IV ECE D",
+    "Scan ID Card"
+);
+
+}
+
+void saveAttendance() {
+
+  for(int i=0;i<studentCount;i++) {
+
+    prefs.putBool(
+      ("pre"+String(i)).c_str(),
+      attendance[i].present
+    );
+
+    prefs.putString(
+      ("tim"+String(i)).c_str(),
+      attendance[i].time
+    );
+  }
+}
+
+void loadAttendance() {
+
+  for(int i=0;i<studentCount;i++) {
+
+    attendance[i].present =
+      prefs.getBool(
+        ("pre"+String(i)).c_str(),
+        false
+      );
+
+    String t =
+      prefs.getString(
+        ("tim"+String(i)).c_str(),
+        ""
+      );
+
+    strcpy(
+      attendance[i].time,
+      t.c_str()
+    );
+  }
+}
+
+void clearAttendance() {
+
+  attendanceClearBeep();
+
+  for(int i=0;i<studentCount;i++) {
+
+    attendance[i].present = false;
+
+    strcpy(attendance[i].time, "");
+
+    prefs.remove(
+      ("pre"+String(i)).c_str()
+    );
+
+    prefs.remove(
+      ("tim"+String(i)).c_str()
+    );
+  }
+
+  lcdMessage(
+    "Attendance",
+    "Cleared"
+  );
+
+  delay(1500);
+
+  lcdMessage(
+    "IV ECE D",
+    "Scan ID Card"
+);
+
+}
+
+
+void exportAttendance()
+{
+  tripleBeep();
+
+  if (!connectWiFi())
+  {
+    delay(2000);
+
+    lcdMessage(
+      "Upload Failed",
+      "No Internet"
+    );
+
+    delay(1500);
+
+    lcdMessage(
+    "IV ECE D",
+    "Scan ID Card"
+);
+
+    return;
+  }
+
+  lcdMessage(
+    "Uploading",
+    "Attendance..."
+  );
+
+  // ==========================
+  // ATTENDANCE SHEET
+  // ALL STUDENTS
+  // ==========================
+
+  for(int i = 0; i < studentCount; i++)
+  {
+    String status =
+      attendance[i].present ?
+      "Present" :
+      "Absent";
+
+    String timeValue =
+      attendance[i].present ?
+      String(attendance[i].time) :
+      "--";
+
+    sendToGoogleSheet(
+      "Attendance",
+      students[i].roll,
+      students[i].name,
+      status,
+      timeValue
+    );
+
+    delay(500);
+  }
+
+  // ==========================
+  // ABSENT SHEET
+  // ONLY ABSENT STUDENTS
+  // ==========================
+
+  for(int i = 0; i < studentCount; i++)
+  {
+    if(!attendance[i].present)
+    {
+      sendToGoogleSheet(
+        "Absent",
+        students[i].roll,
+        students[i].name,
+        "Absent",
+        "--"
+      );
+
+      delay(500);
+    }
+  }
+
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+
+  lcdMessage(
+    "Upload",
+    "Completed"
+  );
+
+  delay(2000);
+
+  lcdMessage(
+    "IV ECE D",
+    "Scan ID Card"
+);
+}
+
+
+  void singleBeep() {
+
+  digitalWrite(BUZZER_PIN, HIGH);
+  delay(150);
+  digitalWrite(BUZZER_PIN, LOW);
+}
+
+void tripleBeep() {
+
+  for(int i=0;i<3;i++) {
+
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(150);
+
+    digitalWrite(BUZZER_PIN, LOW);
+    delay(150);
+  }
+}
+
+void fiveBeep() {
+
+  for(int i=0;i<5;i++) {
+
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(150);
+
+    digitalWrite(BUZZER_PIN, LOW);
+    delay(150);
+  }
+}
+
+void attendanceClearBeep() {
+
+  // Long beep for 5 seconds
+  digitalWrite(BUZZER_PIN, HIGH);
+  delay(2500);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  delay(300);
+
+  // Two short beeps
+  for(int i = 0; i < 2; i++) {
+
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(150);
+
+    digitalWrite(BUZZER_PIN, LOW);
+    delay(150);
+  }
+}
+
+void doubleBeep3Times() {
+  for (int i = 0; i < 3; i++) {
+
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(120);
+    digitalWrite(BUZZER_PIN, LOW);
+    delay(120);
+
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(120);
+    digitalWrite(BUZZER_PIN, LOW);
+    delay(300);
+  }
+}
+
+void checkBellSchedule() {
+
+  DateTime now = rtc.now();
+
+  // Reset daily
+  if (now.day() != lastDay) {
+    lastDay = now.day();
+
+    for (int i = 0; i < bellCount; i++) {
+      bells[i].rung = false;
+    }
+  }
+
+  // Check all bell times
+  for (int i = 0; i < bellCount; i++) {
+
+    if (!bells[i].rung &&
+        now.hour() == bells[i].hour &&
+        now.minute() == bells[i].minute &&
+        now.second() == 0) {
+
+      doubleBeep3Times();
+      bells[i].rung = true;
+    }
+  }
+}
