@@ -1,0 +1,30 @@
+function doGet(e) {
+
+  var ss = SpreadsheetApp.openById("1jom5yjZnWGXKcD_d-FpB19oRmcDH_VHb3NAAQ94Qm1s");
+
+  var sheetNames = ss.getSheets().map(s => s.getName());
+
+  if (!e || !e.parameter.sheet) {
+    return ContentService.createTextOutput(
+      "Available Sheets: " + sheetNames.join(", ")
+    );
+  }
+
+  var sheet = ss.getSheetByName(e.parameter.sheet);
+
+  if (!sheet) {
+    return ContentService.createTextOutput(
+      "Requested: " + e.parameter.sheet +
+      "\nAvailable: " + sheetNames.join(", ")
+    );
+  }
+
+  sheet.appendRow([
+    e.parameter.rollno,
+    e.parameter.name,
+    e.parameter.status,
+    e.parameter.time
+  ]);
+
+  return ContentService.createTextOutput("OK");
+}
